@@ -3,8 +3,8 @@ import numpy as np
 import scipy.sparse as sp
 from operator import itemgetter
 
-from src.hw1.resources import DATA_PATH
-from src.hw1.logging import LOGGING_PATH
+# from src.hw1.resources import DATA_PATH
+# from src.hw1.mse_logs import LOGGING_PATH
 
 import time
 
@@ -56,18 +56,18 @@ class SVD:
         return self.user_item_matrix
 
     def loss(self, scores: np.array, predictions: np.array, user_bias: np.array, item_bias: np.array) -> np.ndarray:
-        mse = np.square(scores - (predictions + user_bias + item_bias + self.mu))
+        mse = predictions + user_bias + item_bias + self.mu - scores
         return mse
 
-    def fit(self, eps: float = 1e-1, max_iter: int = 1_000, n_samples_to_optimize: int = 500, lr: float = 1e-3,
-            gamma: float = 0.001):
-        mse = np.inf
+    def fit(self, eps: float = 5e-1, max_iter: int = 3_000, n_samples_to_optimize: int = 500, lr: float = 1e-3,
+            gamma: float = 0.01, logging_path: str = None):
+        mse = 1
         current_iter = 0
         print('Start fitting the model...')
         start_time = time.time()
         loss_logger = []
 
-        while current_iter < max_iter and np.mean(mse) > eps:
+        while current_iter < max_iter and np.mean(np.sqrt(np.square(mse))) > eps:
             current_iter += 1
             i = np.random.choice(list(self.user_id_mapping.values()), n_samples_to_optimize)
             j = np.random.choice(list(self.movie_id_mapping.values()), n_samples_to_optimize)
@@ -75,30 +75,31 @@ class SVD:
             target_scores = self.user_item_matrix.toarray()[i, j]
             predicted_scores = np.einsum('ij, ij -> i', self.user_matrix[i, :], self.item_matrix[:, j].T)
 
-            user_vector_regularization = np.square(np.linalg.norm(self.user_matrix[i, :], axis=1))
-            item_vector_regularization = np.square(np.linalg.norm(self.item_matrix[:, j], axis=0))
-            regularization = gamma * (
-                    np.sqrt(self.user_bias[i]) + np.sqrt(self.item_bias[j]) + user_vector_regularization
-                    + item_vector_regularization
-            )
-            mse = self.loss(target_scores, predicted_scores, self.user_bias[i], self.item_bias[j]) + regularization
-            loss_logger.append(np.mean(mse))
+            user_vector_regularization = gamma * np.linalg.norm(self.user_matrix[i, :], axis=1)
+            item_vector_regularization = gamma * np.linalg.norm(self.item_matrix[:, j], axis=0)
+            user_bias_regularization = gamma * np.sqrt(np.square(self.user_bias[i]))
+            item_bias_regularization = gamma * np.sqrt(np.square(self.item_bias[j]))
+
+            mse = self.loss(target_scores, predicted_scores, self.user_bias[i], self.item_bias[j])
+            loss_logger.append(np.mean(np.sqrt(np.square(mse))))
 
             # update weights
-            self.user_bias[i] += np.clip(lr * (mse - (gamma * self.user_bias[i])), a_min=1e-8, a_max=1e-1)
-            self.item_bias[j] += np.clip(lr * (mse - (gamma * self.item_bias[j])), a_min=1e-8, a_max=1e-1)
+            self.user_bias[i] -= np.clip(lr * (mse + (gamma * self.user_bias[i])), a_min=-4, a_max=4) + user_bias_regularization
+            self.item_bias[j] -= np.clip(lr * (mse + (gamma * self.item_bias[j])), a_min=-4, a_max=4) + item_bias_regularization
 
             self.user_matrix[i, :] -= lr * (np.einsum(
-                'i, ij -> ij', mse, self.item_matrix[:, j].T) - (gamma * self.user_matrix[i, :]))
+                'i, ij -> ij', mse + user_vector_regularization, self.item_matrix[:, j].T) + (gamma * self.user_matrix[i, :]))
             self.item_matrix[:, j] -= lr * (np.einsum(
-                'i, ij -> ij', mse, self.user_matrix[i, :]).T - (gamma * self.item_matrix[:, j]))
+                'i, ij -> ij', mse + item_vector_regularization, self.user_matrix[i, :]).T + (gamma * self.item_matrix[:, j]))
 
-        # logging loss value
-        loss_logger_df = pd.DataFrame({'iter': range(len(loss_logger)), 'mse': loss_logger})
-        loss_logger_df.to_csv(f"{LOGGING_PATH.parent}/lr{lr}_max_iter{max_iter}_hidden_dim{self.user_matrix.shape[1]}"
-                              f"_samples{n_samples_to_optimize}",
-                              index=False)
+        # mse_logs loss value
+        if logging_path:
+            loss_logger_df = pd.DataFrame({'iter': range(len(loss_logger)), 'mse': loss_logger})
+            loss_logger_df.to_csv(f"{logging_path}/lr{lr}_max_iter{max_iter}_hidden_dim{self.user_matrix.shape[1]}"
+                                  f"_samples{n_samples_to_optimize}",
+                                  index=False)
         print(f'Model fitted in {int(time.time() - start_time)} seconds.')
+        print(f'MSE on iteration {current_iter}: {np.round(loss_logger[-1], 2)}.')
         return self.user_matrix, self.item_matrix
 
 
