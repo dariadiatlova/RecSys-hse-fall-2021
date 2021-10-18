@@ -4,15 +4,21 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_distances
 
 
-def get_csr_matrix_from_pdf(df: pd.DataFrame):
+def get_csr_matrix_from_pdf(df: pd.DataFrame, implicit: bool = False, threshold: int = 4):
     """
     Function takes dataframe constructed from MovieLens ratings file, so it has:
     user_id, movie_id and rating columns.
     :param df: pd.DataFrame
+    :param implicit: if True, all scores higher or equal than threshold will be converted to ones, others to zeros.
+    :param threshold: int value to use for filtering ratings. Default is 4.
     :return: sp.csr.csr_matrix of shape n_unique_users x n_unique_movies.
     """
-    user_item = sp.coo_matrix((df.rating, (df.user_id, df.movie_id)))
-    user_item_t_csr = user_item.T.tocsr()
+    if implicit:
+        df = df.loc[(df.rating >= threshold)]
+        data_vector = np.ones_like(df.user_id)
+    else:
+        data_vector = df.rating
+    user_item = sp.coo_matrix((data_vector, (df.user_id, df.movie_id)))
     return user_item.tocsr()
 
 
@@ -40,7 +46,8 @@ class MatrixFactorization:
         """
         current_prediction_matrix = np.dot(self.user_matrix, self.item_matrix)
         return np.mean(np.square(current_prediction_matrix[self.user_non_zero_idx, self.item_non_zero_idx]
-                                 - self.user_item_matrix.toarray()[self.user_non_zero_idx, self.item_non_zero_idx]))
+                                 - self.user_item_matrix.toarray()[self.user_non_zero_idx, self.item_non_zero_idx])
+                       )
 
     def get_k_similar_movies(self, item_ids: np.array, n: int = 5, metric: str='cosine'):
         """
