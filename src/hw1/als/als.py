@@ -31,7 +31,6 @@ class ALS(MatrixFactorization):
         start_time = time.time()
 
         for epoch in range(epochs):
-
             users = np.random.permutation(list(self.user_item_dictionary.keys()))
             # update user vector
             for user in users:
