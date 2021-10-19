@@ -25,7 +25,7 @@ class ALS(MatrixFactorization):
         inverse_user_matrix = np.linalg.inv(user_product_sum + gamma * self.identity_matrix)
         return inverse_user_matrix
 
-    def fit(self, gamma: float = 200, epochs: int = 3):
+    def fit_matrix_completion(self, gamma: float = 200, epochs: int = 3):
 
         mse_logging = []
         start_time = time.time()
@@ -60,6 +60,31 @@ class ALS(MatrixFactorization):
             mse_logging.append(mse)
 
             print(f"Mse on epoch {epoch}: {mse}.")
+
+        print(f"Model fitted in: {int(time.time() - start_time)} seconds.")
+
+        return self.user_matrix, self.item_matrix
+
+    def fit(self, gamma: float = 1e-2, epochs: int = 30):
+        start_time = time.time()
+        for epoch in range(epochs):
+
+            inverse_item_matrix = np.linalg.inv(
+                np.dot(self.item_matrix, self.item_matrix.T) + gamma * self.identity_matrix)
+
+            self.user_matrix = np.dot(np.dot(self.user_item_matrix.toarray(), self.item_matrix.T),
+                                      inverse_item_matrix)
+
+            inverse_user_matrix = np.linalg.inv(
+                np.dot(self.user_matrix.T, self.user_matrix) + gamma * self.identity_matrix)
+
+            self.item_matrix = np.dot(np.dot(self.user_item_matrix.T.toarray(), self.user_matrix),
+                                      inverse_user_matrix).T
+
+            if epoch % 5 == 0:
+                mse = self.mse()
+
+                print(f"Mse on epoch {epoch}: {mse}.")
 
         print(f"Model fitted in: {int(time.time() - start_time)} seconds.")
 
