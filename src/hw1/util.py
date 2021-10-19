@@ -63,3 +63,18 @@ class MatrixFactorization:
             predicted_scores = 1 - cosine_distances(self.item_matrix[:, item_ids].T, self.item_matrix.T)
         predictions = np.argsort(-predicted_scores)[:, :n + 1]
         return predictions[:, 1:]
+
+    def recommend(self, user_ids: np.array, n: int = 5):
+        recommendations = []
+        for i, user in enumerate(user_ids):
+            predicted_scores = np.dot(
+                self.user_matrix[user, :], self.item_matrix) + self.user_bias[user] + self.item_bias
+            recommendations.append(np.argsort(-predicted_scores)[:n])
+        return recommendations
+
+    def recall(self, user_ids, prediction):
+        matrix = self.user_item_matrix.toarray()
+        return np.mean(
+            [len(np.intersect1d(prediction[i], np.where(matrix[user] > 0)[0])) / np.sum(
+                matrix[user]) for i, user in enumerate(user_ids)]
+        )
