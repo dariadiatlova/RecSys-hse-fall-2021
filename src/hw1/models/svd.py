@@ -78,10 +78,11 @@ class SVD(MatrixFactorization):
                     predicted_score, target_score, self.user_bias[user_idx], self.item_bias[item_idx])
                 self._update_params(loss_item, user_idx, item_idx, update_bias, lr, gamma, beta)
 
-            mse = self.mse()
-            loss_logger.append(mse)
-            epoch_logger.append(epoch)
-            print(f"Epoch: {epoch}, mse: {mse}.")
+            if epoch % verbose == 0:
+                mse = self.mse()
+                loss_logger.append(mse)
+                epoch_logger.append(epoch)
+                print(f"Epoch: {epoch}, mse: {mse}.")
 
         if logging_path:
             loss_logger_df = pd.DataFrame({'epoch': epoch_logger, 'mse': loss_logger})
