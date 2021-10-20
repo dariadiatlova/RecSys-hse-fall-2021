@@ -2,6 +2,8 @@ import pandas as pd
 import scipy.sparse as sp
 import numpy as np
 from sklearn.metrics.pairwise import cosine_distances
+import umap.umap_ as umap
+import plotly.express as px
 
 
 def get_csr_matrix_from_pdf(df: pd.DataFrame, implicit: bool = False, threshold: int = 4):
@@ -20,6 +22,16 @@ def get_csr_matrix_from_pdf(df: pd.DataFrame, implicit: bool = False, threshold:
         data_vector = df.rating
     user_item = sp.coo_matrix((data_vector, (df.user_id, df.movie_id)))
     return user_item.tocsr()
+
+
+def visualize_embeddings(embeddings: np.array, movie_info_df: pd.DataFrame):
+    u = umap.UMAP().fit(embeddings)
+    coords = u.transform(embeddings)
+    coords = pd.DataFrame(coords)
+    coords = pd.concat([coords.reset_index(drop=True),
+                        pd.Series(movie_info_df['category'])], axis=1)
+    fig = px.scatter(coords.dropna(), x=0, y=1, color='category')
+    return fig
 
 
 class MatrixFactorization:
