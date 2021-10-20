@@ -40,7 +40,7 @@ class SVD(MatrixFactorization):
         return loss_item
 
     def fit(self, lr: float = 0.01, gamma: float = 0.001, beta: float = 100., epochs: int = 20,
-            update_bias: bool = True, num_samples_to_update: int = None, logging_path: str = None):
+            update_bias: bool = True, num_samples_to_update: int = None, logging_path: str = None, verbose: int = 5):
         """
         Basic training loop implementation.
         :param lr: float: learning rate used for updating all 4 vectors.
@@ -49,6 +49,7 @@ class SVD(MatrixFactorization):
         :param epochs: int: total number of epochs to use for updating user/item pairs.
         :param update_bias: bool: if true, learn user and bias vector.
         :param num_samples_to_update: int, if not set – equal to all non zero values in the given matrix, so all pairs
+        :param verbose: int, number of iterations to to log mse at
         will bi used for learning during the epoch.
         :param logging_path: path to the folder to write csv file with mse computed on each epoch.
         :return: Tuple[np.ndarray, np.ndarray] – user and item matrices. User matrix n_users x hidden_dim, item matrix:
@@ -63,6 +64,7 @@ class SVD(MatrixFactorization):
         print('Start fitting the model...')
         start_time = time.time()
         loss_logger = []
+        epoch_logger = []
         user_item_matrix = self.user_item_matrix.toarray()
 
         for epoch in range(epochs):
@@ -75,13 +77,14 @@ class SVD(MatrixFactorization):
                 loss_item = self._loss(
                     predicted_score, target_score, self.user_bias[user_idx], self.item_bias[item_idx])
                 self._update_params(loss_item, user_idx, item_idx, update_bias, lr, gamma, beta)
-            print(f"Wow, {epoch}th is fitted in {int(time.time() - start_time) // 60} minutes!")
+
             mse = self.mse()
             loss_logger.append(mse)
+            epoch_logger.append(epoch)
             print(f"Epoch: {epoch}, mse: {mse}.")
 
         if logging_path:
-            loss_logger_df = pd.DataFrame({'epoch': range(len(loss_logger)), 'mse': loss_logger})
+            loss_logger_df = pd.DataFrame({'epoch': epoch_logger, 'mse': loss_logger})
             loss_logger_df.to_csv(f"{logging_path}/lr{lr}_epoch{epochs}_hidden_dim{self.user_matrix.shape[1]}"
                                   f"_samples{num_samples_to_update}", index=False)
 
