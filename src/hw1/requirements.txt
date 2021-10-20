@@ -1,0 +1,7 @@
+numpy
+pandas
+umap-learn
+scipy
+implicit
+sklearn
+plotly
