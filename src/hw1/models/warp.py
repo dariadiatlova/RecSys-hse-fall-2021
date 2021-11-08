@@ -35,27 +35,39 @@ class WARP(MatrixFactorization):
         negative_item_vector = self.item_matrix[:, negative_item_id]
         positive_negative_item_diff = positive_item_vector - negative_item_vector
 
-        self.user_matrix[user_id, :] -= lr * (loss * positive_negative_item_diff + gamma * user_vector)
+        user_grad = loss * positive_negative_item_diff + gamma * user_vector
+        pos_it_grad = loss * user_vector + gamma * positive_item_vector
+        neg_it_grad = loss * -user_vector + gamma * negative_item_vector
 
-        self.item_matrix[:, positive_item_id] -= lr * (loss * user_vector + gamma * positive_item_vector.squeeze())
-        self.item_matrix[:, negative_item_id] -= lr * (loss * user_vector + gamma * negative_item_vector.squeeze())
+        # print(user_grad, pos_it_grad, neg_it_grad)
+
+        self.user_matrix[user_id, :] -= lr * user_grad
+        self.item_matrix[:, positive_item_id] -= lr * pos_it_grad
+        self.item_matrix[:, negative_item_id] -= lr * neg_it_grad
 
     def fit(self, lr: float = 1e-2, gamma: float = 1e-2, epochs: int = 100, n_negative_samples: int = 10):
         start_time = time.time()
         for epoch in range(epochs):
             users = np.random.permutation(self.unique_user_ids)
+
             for user in users:
                 user_positives = self.user_positive_item_dictionary[user]
+
                 for positive_item in user_positives:
                     positive_dot = np.dot(self.user_matrix[user, :], self.item_matrix[:, positive_item])
-                    for i in range(n_negative_samples):
+
+                    for i in range(1, n_negative_samples + 1):
                         negative_dot = self._sample_negative(user)
+                        # print(positive_dot, negative_dot)
                         violation = 1.0 + negative_dot - positive_dot
+
                         if violation <= 0:
                             continue
-                        ranking_coefficient = np.floor(n_negative_samples / (i + 1))
-                        loss = ranking_coefficient * violation
-                        self._update_params(user, positive_item, self.negative_item, lr, gamma, loss)
+                        else:
+                            ranking_coefficient = n_negative_samples // i
+                            loss = np.log(ranking_coefficient) * violation
+                            self._update_params(user, positive_item, self.negative_item, lr, gamma, -loss)
+                            break
 
         print(f"Model is fitted in {int((time.time() - start_time) / 60)} minutes.")
         return self.user_matrix, self.item_matrix
