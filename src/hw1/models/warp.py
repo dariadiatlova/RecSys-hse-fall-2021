@@ -24,47 +24,38 @@ class WARP(MatrixFactorization):
 
     def _sample_negative(self, user_id: np.ndarray) -> float:
         user_vector = self.user_matrix[user_id, :]
-        self.negative_item = np.random.choice(self.user_negative_item_dictionary[user_id], 1)
+        self.negative_item = np.random.choice(self.user_negative_item_dictionary[user_id], 1)[0]
         return np.dot(user_vector, self.item_matrix[:, self.negative_item])
 
     def _update_params(self, user_id: int, positive_item_id: int, negative_item_id: int, lr: float, gamma: float,
-                       ranking_coefficient: float):
+                       loss: float):
 
         user_vector = self.user_matrix[user_id, :]
         positive_item_vector = self.item_matrix[:, positive_item_id]
         negative_item_vector = self.item_matrix[:, negative_item_id]
+        positive_negative_item_diff = positive_item_vector - negative_item_vector
 
-        self.user_matrix[user_id, :] -= lr * (ranking_coefficient * (negative_item_vector - positive_item_vector).T +
-                                              gamma * user_vector)[0]
+        self.user_matrix[user_id, :] -= lr * (loss * positive_negative_item_diff + gamma * user_vector)
 
-        self.item_matrix[:, positive_item_id] -= lr * (
-                -ranking_coefficient * user_vector + gamma * positive_item_vector.squeeze()).reshape(-1, 1)
-        self.item_matrix[:, negative_item_id] -= lr * (
-                ranking_coefficient * user_vector + gamma * negative_item_vector.squeeze()).reshape(-1, 1)
+        self.item_matrix[:, positive_item_id] -= lr * (loss * user_vector + gamma * positive_item_vector.squeeze())
+        self.item_matrix[:, negative_item_id] -= lr * (loss * user_vector + gamma * negative_item_vector.squeeze())
 
-    def fit(self, lr: float = 1e-2, gamma: float = 1e-2, epochs: int = 100, verbose: int = 100):
+    def fit(self, lr: float = 1e-2, gamma: float = 1e-2, epochs: int = 100, n_negative_samples: int = 10):
         start_time = time.time()
         for epoch in range(epochs):
-            n_attempts = []
             users = np.random.permutation(self.unique_user_ids)
-
             for user in users:
-                positive_item = np.random.choice(self.user_positive_item_dictionary[user], 1)
-                positive_dot = np.dot(self.user_matrix[user, :], self.item_matrix[:, positive_item])
-                negative_dot = self._sample_negative(user)
-                n_attempts_to_sample_wrong = 1
-                user_negative_samples_count = len(self.user_negative_item_dictionary[user])
-                while positive_dot > negative_dot and n_attempts_to_sample_wrong < user_negative_samples_count:
-                    n_attempts_to_sample_wrong += 1
-                    negative_dot = self._sample_negative(user)
-                ranking_coefficient = np.floor((user_negative_samples_count - 1) / n_attempts_to_sample_wrong)
-                self._update_params(user, positive_item, self.negative_item, lr, gamma, ranking_coefficient)
-
-                if epoch % verbose == 0:
-                    n_attempts.append(n_attempts_to_sample_wrong)
-
-            if epoch % verbose == 0:
-                print(f"Mean number of attempts to sample wrong on epoch {epoch}: {np.mean(n_attempts)}.")
+                user_positives = self.user_positive_item_dictionary[user]
+                for positive_item in user_positives:
+                    positive_dot = np.dot(self.user_matrix[user, :], self.item_matrix[:, positive_item])
+                    for i in range(n_negative_samples):
+                        negative_dot = self._sample_negative(user)
+                        violation = 1.0 + negative_dot - positive_dot
+                        if violation <= 0:
+                            continue
+                        ranking_coefficient = np.floor(n_negative_samples / (i + 1))
+                        loss = ranking_coefficient * violation
+                        self._update_params(user, positive_item, self.negative_item, lr, gamma, loss)
 
         print(f"Model is fitted in {int((time.time() - start_time) / 60)} minutes.")
         return self.user_matrix, self.item_matrix
