@@ -69,7 +69,7 @@ class KNNXGB:
     def train(self):
         print(f"Filtering data...")
         train_df = get_train_df()
-        train_df = train_df.sample(n=500)
+        train_df = train_df.sample(n=100_000)
         dataset = Dataset(train_df)
 
         print(f"Tokenize data...")
@@ -84,6 +84,7 @@ class KNNXGB:
         self.knn = KNNRecommender(self.n_neighbors, self.algorithm)
         self.knn.fit(all_songs_embeddings)
 
+        cat_features_df_with_target = cat_features_df.copy()
         target = cat_features_df.pop("target")
         data_train, data_test, target_train, target_test = train_test_split(cat_features_df, target,
                                                                             test_size=self.test_size)
@@ -98,16 +99,17 @@ class KNNXGB:
 
         xgb_train_data = np.array(data_train.drop(columns=["song_embedding"]))
         self.xgb.fit(xgb_train_data, np.array(target_train))
-        return self.evaluation(data_test, target_test, df_user_emb, cat_features_df, train_df)
+        return self.evaluation(data_test, df_user_emb, cat_features_df_with_target)
 
-    def evaluation(self, data_test, target_test, df_user_emb, cat_features_df, train_df):
+    def evaluation(self, data_test, df_user_emb, cat_features_df):
+        print("Evaluating...")
         user_embs = df_user_emb.set_index("msno").loc[data_test.msno.values].avg_song_emb
         candidates = self.knn.predict(np.array(list(user_embs)))
 
-        all_user_predictions = []
-        all_users = []
+        metric_measure = []
+        all_targets = []
+        all_predictions = []
         cat_features_view = cat_features_df.reset_index(drop=True)
-        train_df_view = train_df.reset_index(drop=True)
 
         for i, user in enumerate(data_test.msno.values):
             user_predictions = []
@@ -118,19 +120,26 @@ class KNNXGB:
 
                 if song_id in user_songs:
                     df = cat_features_view.loc[(cat_features_view["msno"] == user) & (cat_features_view["song_id"] == song_id)]
+                    target = int(list(df.pop("target"))[0])
                     score = self.xgb.predict_proba(df.drop(columns=["song_embedding"]))[:, 1]
-                    user_predictions.append([song_id, score[0]])
+                    user_predictions.append([target, score[0]])
 
             if user_predictions:
                 predictions = np.sort(np.array(user_predictions), axis=0)[::-1]
-                all_users.append(user)
-                all_user_predictions.append(predictions[:self.n_predictions, 0])
+                recall = np.sum(predictions[:self.n_predictions, 0]) / len(predictions[:self.n_predictions, 0])
+                all_targets.append(predictions[:self.n_predictions, 0])
+                all_predictions.append(predictions[: self.n_predictions, 1])
+                metric_measure.append(recall)
 
-        return all_users, all_user_predictions
+        fpr, tpr, thresholds = metrics.roc_curve(np.concatenate(all_targets).flatten(),
+                                                 np.concatenate(all_predictions).flatten(), pos_label=1)
+        auc = metrics.auc(fpr, tpr)
+
+        return np.mean(metric_measure), auc
 
 
-config = OmegaConf.load(CONFIG_PATH)
-config = OmegaConf.to_container(config, resolve=True)
-alg = KNNXGB(**config)
-cnd = alg.train()
-print(cnd)
+# config = OmegaConf.load(CONFIG_PATH)
+# config = OmegaConf.to_container(config, resolve=True)
+# alg = KNNXGB(**config)
+# cnd = alg.train()
+# print(cnd)
