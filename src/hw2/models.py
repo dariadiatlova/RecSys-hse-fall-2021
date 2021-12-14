@@ -1,6 +1,10 @@
 import numpy as np
+import pandas as pd
 import xgboost as xgb
+
 from omegaconf import OmegaConf
+from tqdm import tqdm
+from typing import List
 
 from sklearn.model_selection import KFold, train_test_split
 from sklearn import metrics
@@ -66,27 +70,32 @@ class KNNXGB:
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def train(self):
+    def train(self, n_train_samples: int = None, evaluate: bool = False):
         print(f"Filtering data...")
         train_df = get_train_df()
-        train_df = train_df.sample(n=100_000)
+        if n_train_samples:
+            train_df = train_df.sample(n=n_train_samples)
         dataset = Dataset(train_df)
+        song_ids = dataset.get_song_ids()
 
         print(f"Tokenize data...")
         df_all_songs_emb = dataset.tokenize(emb_size=self.emb_size)
         song_embedding_ser = df_all_songs_emb["song_embedding"].values
         cat_features_df = to_categorical(df_all_songs_emb.drop(columns=["song_embedding"]))
         cat_features_df["song_embedding"] = song_embedding_ser
-        df_user_emb = dataset.group_by_song(cat_features_df)
+        df_user_emb = dataset.group_by_song(cat_features_df, only_positive=True)
+        # drop users whom we lost while computing embeddings
+        cat_features_df = pd.merge(df_user_emb, cat_features_df, how="inner").drop(columns=['avg_song_emb'])
         all_songs_embeddings = np.array(list(song_embedding_ser))
 
         print(f"Started KNN training...")
         self.knn = KNNRecommender(self.n_neighbors, self.algorithm)
+        print(f"Songs embedding count: {len(all_songs_embeddings)}.")
         self.knn.fit(all_songs_embeddings)
 
         cat_features_df_with_target = cat_features_df.copy()
         target = cat_features_df.pop("target")
-        data_train, data_test, target_train, target_test = train_test_split(cat_features_df, target,
+        data_train, data_test, target_train, target_test = train_test_split(cat_features_df, target.values,
                                                                             test_size=self.test_size)
         print(f"Started XGB training...")
         self.xgb = xgb.XGBClassifier(learning_rate=self.learning_rate,
@@ -97,12 +106,22 @@ class KNNXGB:
                                       objective="binary:logistic",
                                       use_label_encoder=False)
 
-        xgb_train_data = np.array(data_train.drop(columns=["song_embedding"]))
+        xgb_train_data = np.array(data_train.drop(columns=["song_embedding"]).values)
         self.xgb.fit(xgb_train_data, np.array(target_train))
-        return self.evaluation(data_test, df_user_emb, cat_features_df_with_target)
 
-    def evaluation(self, data_test, df_user_emb, cat_features_df):
-        print("Evaluating...")
+        # evaluation
+        if evaluate:
+            self.evaluation(data_test, df_user_emb, cat_features_df_with_target, song_ids)
+
+        # for prediction
+        self.cat_features_df_predict = cat_features_df_with_target
+        self.song_ids = song_ids
+        self.user_emb = df_user_emb
+        self.data_with_artist_name = train_df
+
+    def evaluation(self, data_test, df_user_emb, cat_features_df, song_id_collection):
+        print("Getting KNN predictions...")
+
         user_embs = df_user_emb.set_index("msno").loc[data_test.msno.values].avg_song_emb
         candidates = self.knn.predict(np.array(list(user_embs)))
 
@@ -111,17 +130,17 @@ class KNNXGB:
         all_predictions = []
         cat_features_view = cat_features_df.reset_index(drop=True)
 
-        for i, user in enumerate(data_test.msno.values):
+        for i, user in enumerate(tqdm(data_test.msno.values, desc="Evaluated:")):
             user_predictions = []
             user_songs = np.array(cat_features_df[cat_features_df.msno == user].song_id.values.tolist())
 
             for candidate in candidates[i]:
-                song_id = cat_features_view.loc[candidate].song_id
+                song_id = song_id_collection[candidate]
 
                 if song_id in user_songs:
                     df = cat_features_view.loc[(cat_features_view["msno"] == user) & (cat_features_view["song_id"] == song_id)]
                     target = int(list(df.pop("target"))[0])
-                    score = self.xgb.predict_proba(df.drop(columns=["song_embedding"]))[:, 1]
+                    score = self.xgb.predict_proba(df.drop(columns=["song_embedding"]).values)[:, 1]
                     user_predictions.append([target, score[0]])
 
             if user_predictions:
@@ -137,9 +156,55 @@ class KNNXGB:
 
         return np.mean(metric_measure), auc
 
+    def predict(self, user_ids: List[int], n_recommendations: int = 10, exploration_rate: float = 0.2):
+        artist_names = np.array(list(self.data_with_artist_name["artist_name"].values))
+        user_embs = self.user_emb.set_index("msno").loc[pd.Series(user_ids)].avg_song_emb
+        candidates = self.knn.predict(np.array(list(user_embs)))
+        cat_features_view = self.cat_features_df_predict.reset_index(drop=True)
+
+        to_recommend = int(n_recommendations * exploration_rate)
+        to_sample = int(n_recommendations - to_recommend)
+
+        user_recommendation_list = []
+        user_true_songs = []
+
+        for i, user_id in enumerate(tqdm(user_ids, desc="Predicted:")):
+            user_prediction_scores = []
+            user_true_artists = []
+
+            user_songs = np.array(
+                self.cat_features_df_predict.loc[(self.cat_features_df_predict.msno == user_id) &
+                                                 (self.cat_features_df_predict.target == 1)].song_id.values.tolist())
+
+            for song_id in candidates[i]:
+                if song_id in user_songs:
+                    df = cat_features_view.loc[(cat_features_view["msno"] == user_id) &
+                                               (cat_features_view["song_id"] == song_id)]
+                    score = self.xgb.predict_proba(df.drop(columns=["song_embedding", "target"]).values)[:, 1]
+                    user_prediction_scores.append([score, artist_names[song_id]])
+
+            if user_prediction_scores:
+                if len(user_prediction_scores) < to_recommend:
+                    to_sample = n_recommendations - len(user_prediction_scores)
+                sorted_predictions = np.sort(np.array(user_prediction_scores), axis=0)[::-1]
+                user_recommendations = np.concatenate(sorted_predictions[:to_recommend, 1],
+                                                      artist_names[np.random.choice(candidates[i], to_sample)])
+            else:
+                user_recommendations = np.random.choice(artist_names[candidates[i]], to_sample)
+
+            if len(user_songs) > n_recommendations:
+                user_true_artists.append(artist_names[np.random.choice(user_songs, n_recommendations)])
+            else:
+                user_true_artists.append(artist_names[user_songs])
+
+            user_recommendation_list.append(user_recommendations)
+            user_true_songs.append(user_true_artists)
+
+        return user_recommendation_list, user_true_songs
+
 
 # config = OmegaConf.load(CONFIG_PATH)
 # config = OmegaConf.to_container(config, resolve=True)
 # alg = KNNXGB(**config)
-# cnd = alg.train()
-# print(cnd)
+# alg.train(n_train_samples=100_000, evaluate=False)
+# print(alg.predict([1, 456, 689]))

@@ -1,8 +1,8 @@
 pandas
 numpy
-xgboost
+xgboost==0.80 # another versions crash jupyter-kernel
 sklearn
 matplotlib
 seaborn
 omegaconf
-
+tokenizers
