@@ -1,12 +1,14 @@
 seed: 9
 k: 5
-learning_rate: 0.1
-max_depth: 10
+learning_rate: 0.1 # xgb param
+max_depth: 10 # xgb param
 min_child_weight: 5
-n_estimators: 10
+n_estimators: 10 # xgb param
 eval_metric: "auc"
 emb_size: 5
-n_neighbors: 150
+n_neighbors: 150 # number of candidates to use before ranking
 algorithm: "auto"
 test_size: 0.3
-n_predictions: 10
+n_predictions: 10 # number of predictions to compute recall@n
+n_recommendations: 10 # number of recommendations to retrieve for user
+exploration_rate: 0.2 # rate of random knn-candidates to be add to user recommendations

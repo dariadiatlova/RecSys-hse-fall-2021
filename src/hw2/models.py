@@ -109,33 +109,33 @@ class KNNXGB:
         xgb_train_data = np.array(data_train.drop(columns=["song_embedding"]).values)
         self.xgb.fit(xgb_train_data, np.array(target_train))
 
-        # evaluation
-        if evaluate:
-            self.evaluation(data_test, df_user_emb, cat_features_df_with_target, song_ids)
-
-        # for prediction
+        # for prediction & evaluation
         self.cat_features_df_predict = cat_features_df_with_target
         self.song_ids = song_ids
         self.user_emb = df_user_emb
         self.data_with_artist_name = train_df
 
-    def evaluation(self, data_test, df_user_emb, cat_features_df, song_id_collection):
+        if evaluate:
+            return self.evaluation(data_test)
+
+    def evaluation(self, data_test):
         print("Getting KNN predictions...")
 
-        user_embs = df_user_emb.set_index("msno").loc[data_test.msno.values].avg_song_emb
+        user_embs = self.user_emb.set_index("msno").loc[data_test.msno.values].avg_song_emb
         candidates = self.knn.predict(np.array(list(user_embs)))
 
         metric_measure = []
         all_targets = []
         all_predictions = []
-        cat_features_view = cat_features_df.reset_index(drop=True)
+        cat_features_view = self.cat_features_df_predict.reset_index(drop=True)
 
         for i, user in enumerate(tqdm(data_test.msno.values, desc="Evaluated:")):
             user_predictions = []
-            user_songs = np.array(cat_features_df[cat_features_df.msno == user].song_id.values.tolist())
+            user_songs = np.array(
+                self.cat_features_df_predict[self.cat_features_df_predict.msno == user].song_id.values.tolist())
 
             for candidate in candidates[i]:
-                song_id = song_id_collection[candidate]
+                song_id = self.song_ids[candidate]
 
                 if song_id in user_songs:
                     df = cat_features_view.loc[(cat_features_view["msno"] == user) & (cat_features_view["song_id"] == song_id)]
@@ -156,14 +156,14 @@ class KNNXGB:
 
         return np.mean(metric_measure), auc
 
-    def predict(self, user_ids: List[int], n_recommendations: int = 10, exploration_rate: float = 0.2):
+    def predict(self, user_ids: List[int]):
         artist_names = np.array(list(self.data_with_artist_name["artist_name"].values))
         user_embs = self.user_emb.set_index("msno").loc[pd.Series(user_ids)].avg_song_emb
         candidates = self.knn.predict(np.array(list(user_embs)))
         cat_features_view = self.cat_features_df_predict.reset_index(drop=True)
 
-        to_recommend = int(n_recommendations * exploration_rate)
-        to_sample = int(n_recommendations - to_recommend)
+        to_recommend = int(self.n_recommendations * (1 - self.exploration_rate))
+        to_sample = int(self.n_recommendations - to_recommend)
 
         user_recommendation_list = []
         user_true_songs = []
@@ -185,20 +185,20 @@ class KNNXGB:
 
             if user_prediction_scores:
                 if len(user_prediction_scores) < to_recommend:
-                    to_sample = n_recommendations - len(user_prediction_scores)
+                    to_sample = self.n_recommendations - len(user_prediction_scores)
                 sorted_predictions = np.sort(np.array(user_prediction_scores), axis=0)[::-1]
                 user_recommendations = np.concatenate(sorted_predictions[:to_recommend, 1],
                                                       artist_names[np.random.choice(candidates[i], to_sample)])
             else:
-                user_recommendations = np.random.choice(artist_names[candidates[i]], to_sample)
+                user_recommendations = np.random.choice(artist_names[candidates[i]], self.n_recommendations)
 
-            if len(user_songs) > n_recommendations:
-                user_true_artists.append(artist_names[np.random.choice(user_songs, n_recommendations)])
+            if len(user_songs) > self.n_recommendations:
+                user_true_artists.append(artist_names[np.random.choice(user_songs, self.n_recommendations)])
             else:
                 user_true_artists.append(artist_names[user_songs])
 
             user_recommendation_list.append(user_recommendations)
-            user_true_songs.append(user_true_artists)
+            user_true_songs.append(user_true_artists[0])
 
         return user_recommendation_list, user_true_songs
 
